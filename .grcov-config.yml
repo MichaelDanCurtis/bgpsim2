@@ -1,0 +1,4 @@
+ignore:
+  - "bgpsim-web/*"
+  - "bgpsim-macros/*"
+  - "**/.cargo/registry/src/*"

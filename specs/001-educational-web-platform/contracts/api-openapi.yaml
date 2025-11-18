@@ -1,0 +1,1181 @@
+openapi: 3.0.3
+info:
+  title: BGPemu2 Educational Platform API
+  description: |
+    RESTful API for the BGPemu2 educational BGP/OSPF training platform.
+    Provides endpoints for authentication, lesson management, topology creation,
+    simulation control, and student progress tracking.
+    
+    **Base URL**: `https://api.bgpemu2.example.com/v1`
+    **WebSocket URL**: `wss://api.bgpemu2.example.com/v1/ws`
+  version: 1.0.0
+  contact:
+    name: BGPemu2 Project
+    url: https://github.com/yourusername/bgpemu2
+
+servers:
+  - url: https://api.bgpemu2.example.com/v1
+    description: Production server
+  - url: http://localhost:3000/v1
+    description: Local development server
+
+tags:
+  - name: Authentication
+    description: User registration, login, and token management
+  - name: Lessons
+    description: Lesson CRUD and publishing
+  - name: Tasks
+    description: Task management and validation
+  - name: Topologies
+    description: Network topology creation and modification
+  - name: Scenarios
+    description: Template library and cloning
+  - name: Progress
+    description: Student progress tracking
+  - name: WebSocket
+    description: Real-time simulation updates
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /auth/login
+
+  schemas:
+    # ==================== Core Entities ====================
+    
+    User:
+      type: object
+      required: [user_id, email, name, role, workspace_id, created_at]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          example: student@example.com
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Alice Student
+        role:
+          type: string
+          enum: [student, instructor, admin]
+        workspace_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+
+    Lesson:
+      type: object
+      required: [lesson_id, title, description, objectives, difficulty, estimated_time_minutes, topology_id, created_by, version, published_status]
+      properties:
+        lesson_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: BGP Route Reflection Basics
+        description:
+          type: string
+          example: Learn how to configure BGP route reflectors to scale iBGP meshes
+        objectives:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 10
+          example:
+            - Understand route reflector client relationships
+            - Configure RR on Cisco IOS syntax
+            - Verify iBGP session states
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+        estimated_time_minutes:
+          type: integer
+          minimum: 1
+          maximum: 300
+          example: 45
+        topology_id:
+          type: string
+          format: uuid
+        task_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Ordered list of task UUIDs
+        quiz_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        created_by:
+          type: string
+          format: uuid
+          description: Instructor user_id
+        version:
+          type: integer
+          minimum: 1
+          example: 1
+        published_status:
+          type: string
+          enum: [draft, published, archived]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Task:
+      type: object
+      required: [task_id, lesson_id, order, description, validation_criteria, hints]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        order:
+          type: integer
+          minimum: 1
+          example: 1
+        description:
+          type: string
+          example: Configure R1 as a route reflector with R2 and R3 as clients
+        validation_criteria:
+          $ref: '#/components/schemas/ValidationCriteria'
+        hints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hint'
+          minItems: 3
+          maxItems: 3
+          description: Must have exactly 3 hints (Nudge, Detailed, Solution)
+
+    ValidationCriteria:
+      type: object
+      required: [rules]
+      properties:
+        rules:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/BgpSessionStateRule'
+              - $ref: '#/components/schemas/RouteExistsRule'
+              - $ref: '#/components/schemas/OspfNeighborCountRule'
+              - $ref: '#/components/schemas/ConfigContainsRule'
+
+    BgpSessionStateRule:
+      type: object
+      required: [type, router_id, neighbor_ip, expected_state]
+      properties:
+        type:
+          type: string
+          enum: [BgpSessionState]
+        router_id:
+          type: string
+          example: R1
+        neighbor_ip:
+          type: string
+          example: 10.0.0.2
+        expected_state:
+          type: string
+          enum: [idle, connect, active, opensent, openconfirm, established]
+
+    RouteExistsRule:
+      type: object
+      required: [type, router_id, prefix]
+      properties:
+        type:
+          type: string
+          enum: [RouteExists]
+        router_id:
+          type: string
+          example: R2
+        prefix:
+          type: string
+          example: 192.0.2.0/24
+        next_hop:
+          type: string
+          nullable: true
+          example: 10.0.0.1
+
+    OspfNeighborCountRule:
+      type: object
+      required: [type, router_id, expected_count]
+      properties:
+        type:
+          type: string
+          enum: [OspfNeighborCount]
+        router_id:
+          type: string
+          example: R3
+        expected_count:
+          type: integer
+          minimum: 0
+          example: 2
+
+    ConfigContainsRule:
+      type: object
+      required: [type, router_id, pattern]
+      properties:
+        type:
+          type: string
+          enum: [ConfigContains]
+        router_id:
+          type: string
+        pattern:
+          type: string
+          example: route-reflector-client
+
+    Hint:
+      type: object
+      required: [level, text]
+      properties:
+        level:
+          type: string
+          enum: [Nudge, Detailed, Solution]
+        text:
+          type: string
+          example: Check the BGP neighbor configuration syntax
+
+    Topology:
+      type: object
+      required: [topology_id, name, router_ids, link_ids, config_snapshot, created_at, owner_user_id]
+      properties:
+        topology_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Simple iBGP Full Mesh
+        router_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+        link_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        external_peer_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        config_snapshot:
+          type: object
+          description: Full bgpsim YAML config as JSON
+        created_at:
+          type: string
+          format: date-time
+        owner_user_id:
+          type: string
+          format: uuid
+
+    Router:
+      type: object
+      required: [router_id, topology_id, name, position, as_number, bgp_config, running_config, state]
+      properties:
+        router_id:
+          type: string
+          format: uuid
+        topology_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_-]*$'
+          example: R1
+        position:
+          $ref: '#/components/schemas/Position'
+        as_number:
+          type: integer
+          minimum: 1
+          maximum: 4294967295
+          example: 65001
+        bgp_config:
+          $ref: '#/components/schemas/BgpConfig'
+        ospf_config:
+          $ref: '#/components/schemas/OspfConfig'
+          nullable: true
+        running_config:
+          type: string
+          description: Full CLI config text
+        state:
+          type: string
+          enum: [running, stopped, failed]
+
+    Position:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: number
+          format: double
+          minimum: 0
+        y:
+          type: number
+          format: double
+          minimum: 0
+
+    BgpConfig:
+      type: object
+      required: [router_id, neighbors, networks]
+      properties:
+        router_id:
+          type: string
+          example: 10.0.0.1
+        neighbors:
+          type: array
+          items:
+            $ref: '#/components/schemas/BgpNeighbor'
+        networks:
+          type: array
+          items:
+            type: string
+          example: [192.0.2.0/24, 198.51.100.0/24]
+        route_maps:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteMap'
+
+    BgpNeighbor:
+      type: object
+      required: [ip, remote_as]
+      properties:
+        ip:
+          type: string
+          example: 10.0.0.2
+        remote_as:
+          type: integer
+          example: 65002
+        description:
+          type: string
+          nullable: true
+
+    OspfConfig:
+      type: object
+      required: [router_id, areas]
+      properties:
+        router_id:
+          type: string
+          example: 10.0.0.1
+        areas:
+          type: array
+          items:
+            $ref: '#/components/schemas/OspfArea'
+
+    OspfArea:
+      type: object
+      required: [area_id, networks]
+      properties:
+        area_id:
+          type: integer
+          example: 0
+        networks:
+          type: array
+          items:
+            type: string
+          example: [10.0.0.0/24]
+
+    RouteMap:
+      type: object
+      required: [name, entries]
+      properties:
+        name:
+          type: string
+          example: PREFER_AS_65002
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteMapEntry'
+
+    RouteMapEntry:
+      type: object
+      required: [sequence, action, conditions, set_actions]
+      properties:
+        sequence:
+          type: integer
+          example: 10
+        action:
+          type: string
+          enum: [Permit, Deny]
+        conditions:
+          type: array
+          items:
+            type: string
+          example: [match as-path 100]
+        set_actions:
+          type: array
+          items:
+            type: string
+          example: [set local-preference 200]
+
+    Link:
+      type: object
+      required: [link_id, topology_id, source_router_id, dest_router_id, weight, state]
+      properties:
+        link_id:
+          type: string
+          format: uuid
+        topology_id:
+          type: string
+          format: uuid
+        source_router_id:
+          type: string
+          format: uuid
+        dest_router_id:
+          type: string
+          format: uuid
+        weight:
+          type: integer
+          minimum: 1
+          example: 10
+        latency_ms:
+          type: number
+          format: double
+          minimum: 0
+          nullable: true
+        state:
+          type: string
+          enum: [up, down, degraded]
+
+    Scenario:
+      type: object
+      required: [scenario_id, name, description, difficulty, protocol_tags, topology_id, is_public, created_by]
+      properties:
+        scenario_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Anycast CDN Distribution
+        description:
+          type: string
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced]
+        protocol_tags:
+          type: array
+          items:
+            type: string
+            enum: [bgp, ospf, anycast, mpls, vpnl3]
+          minItems: 1
+          maxItems: 5
+        topology_id:
+          type: string
+          format: uuid
+        is_public:
+          type: boolean
+        popularity_score:
+          type: integer
+          minimum: 0
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    Progress:
+      type: object
+      required: [progress_id, user_id, lesson_id, completed_tasks, hints_used, quiz_scores, started_at]
+      properties:
+        progress_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        current_task_id:
+          type: string
+          format: uuid
+          nullable: true
+        completed_tasks:
+          type: array
+          items:
+            type: string
+            format: uuid
+        hints_used:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Map of task_id to hint count
+          example:
+            "550e8400-e29b-41d4-a716-446655440000": 2
+        quiz_scores:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+          description: Map of quiz_id to score (0.0-1.0)
+        started_at:
+          type: string
+          format: date-time
+        completion_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ==================== Request/Response Models ====================
+
+    RegisterRequest:
+      type: object
+      required: [email, password, name, role]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+          description: Must be at least 12 characters
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        role:
+          type: string
+          enum: [student, instructor]
+          default: student
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: JWT bearer token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: '#/components/schemas/User'
+
+    ValidationResult:
+      type: object
+      required: [task_id, passed, diagnostics]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        passed:
+          type: boolean
+        diagnostics:
+          type: string
+          example: "BGP session R1->10.0.0.2 is in Active state, expected Established"
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: ValidationError
+        message:
+          type: string
+          example: Task validation failed - BGP neighbor not configured
+
+# ==================== Endpoints ====================
+
+paths:
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid input (weak password, invalid email)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+
+  /lessons:
+    get:
+      tags: [Lessons]
+      summary: List all published lessons
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: difficulty
+          in: query
+          schema:
+            type: string
+            enum: [beginner, intermediate, advanced]
+        - name: protocol
+          in: query
+          schema:
+            type: string
+            enum: [bgp, ospf]
+      responses:
+        '200':
+          description: List of lessons
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Lesson'
+
+    post:
+      tags: [Lessons]
+      summary: Create new lesson (instructors only)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lesson'
+      responses:
+        '201':
+          description: Lesson created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        '403':
+          description: Forbidden - user is not instructor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /lessons/{lesson_id}:
+    get:
+      tags: [Lessons]
+      summary: Get lesson details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Lesson details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        '404':
+          description: Lesson not found
+
+    put:
+      tags: [Lessons]
+      summary: Update lesson (instructors only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lesson'
+      responses:
+        '200':
+          description: Lesson updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        '403':
+          description: Forbidden
+        '404':
+          description: Lesson not found
+
+    delete:
+      tags: [Lessons]
+      summary: Delete lesson (instructors only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Lesson deleted
+        '403':
+          description: Forbidden
+        '404':
+          description: Lesson not found
+
+  /lessons/{lesson_id}/publish:
+    post:
+      tags: [Lessons]
+      summary: Publish lesson (instructors only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Lesson published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        '403':
+          description: Forbidden
+        '404':
+          description: Lesson not found
+
+  /tasks/{task_id}/validate:
+    post:
+      tags: [Tasks]
+      summary: Validate task completion
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topology_state]
+              properties:
+                topology_state:
+                  type: object
+                  description: Current topology state for validation
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '404':
+          description: Task not found
+
+  /topologies:
+    get:
+      tags: [Topologies]
+      summary: List user topologies
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of topologies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Topology'
+
+    post:
+      tags: [Topologies]
+      summary: Create new topology
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Topology'
+      responses:
+        '201':
+          description: Topology created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topology'
+        '400':
+          description: Invalid topology data
+
+  /topologies/{topology_id}:
+    get:
+      tags: [Topologies]
+      summary: Get topology details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: topology_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Topology details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topology'
+        '404':
+          description: Topology not found
+
+    put:
+      tags: [Topologies]
+      summary: Update topology
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: topology_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Topology'
+      responses:
+        '200':
+          description: Topology updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topology'
+        '404':
+          description: Topology not found
+
+    delete:
+      tags: [Topologies]
+      summary: Delete topology
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: topology_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Topology deleted
+        '404':
+          description: Topology not found
+
+  /topologies/{topology_id}/export:
+    get:
+      tags: [Topologies]
+      summary: Export topology as YAML
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: topology_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Topology YAML
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+
+  /scenarios:
+    get:
+      tags: [Scenarios]
+      summary: List public scenarios
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: difficulty
+          in: query
+          schema:
+            type: string
+            enum: [beginner, intermediate, advanced]
+        - name: protocol
+          in: query
+          schema:
+            type: string
+            enum: [bgp, ospf, anycast]
+      responses:
+        '200':
+          description: List of scenarios
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Scenario'
+
+  /scenarios/{scenario_id}/clone:
+    post:
+      tags: [Scenarios]
+      summary: Clone scenario to user workspace
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Cloned topology
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topology'
+        '404':
+          description: Scenario not found
+
+  /progress/lessons/{lesson_id}:
+    get:
+      tags: [Progress]
+      summary: Get student progress for lesson
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Progress details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '404':
+          description: Progress not found (lesson not started)
+
+    post:
+      tags: [Progress]
+      summary: Start lesson (create progress entry)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Progress created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '409':
+          description: Lesson already started
+
+  /progress/lessons/{lesson_id}/tasks/{task_id}/complete:
+    post:
+      tags: [Progress]
+      summary: Mark task as completed
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Task marked complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '400':
+          description: Task validation not passed
+
+  /progress/lessons/{lesson_id}/hints:
+    post:
+      tags: [Progress]
+      summary: Record hint usage
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: lesson_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_id, hint_level]
+              properties:
+                task_id:
+                  type: string
+                  format: uuid
+                hint_level:
+                  type: string
+                  enum: [Nudge, Detailed, Solution]
+      responses:
+        '200':
+          description: Hint usage recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+
+  /ws:
+    get:
+      tags: [WebSocket]
+      summary: WebSocket connection for real-time simulation updates
+      description: |
+        Upgrade HTTP connection to WebSocket for bidirectional communication.
+        Send topology_id on connect to subscribe to simulation events.
+        
+        **Message Format**:
+        ```json
+        {
+          "type": "SimulationUpdate",
+          "state": { "timestamp": 10.5, "router_states": {...} },
+          "timestamp": 10.5
+        }
+        ```
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: JWT bearer token
+      responses:
+        '101':
+          description: Switching Protocols to WebSocket
+        '401':
+          description: Unauthorized
